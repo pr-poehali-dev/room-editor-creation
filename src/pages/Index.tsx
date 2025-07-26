@@ -5,6 +5,9 @@ import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
 import { Switch } from '@/components/ui/switch';
 import { Slider } from '@/components/ui/slider';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import Icon from '@/components/ui/icon';
 
 interface Point {
@@ -48,12 +51,17 @@ interface Layer {
 function Index() {
   const [selectedTool, setSelectedTool] = useState('select');
   const [selectedRoom, setSelectedRoom] = useState<Room | null>(null);
+  const [selectedWall, setSelectedWall] = useState<Wall | null>(null);
+  const [selectedDoor, setSelectedDoor] = useState<Door | null>(null);
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [isPanning, setIsPanning] = useState(false);
   const [isDrawing, setIsDrawing] = useState(false);
   const [drawingStart, setDrawingStart] = useState<Point | null>(null);
   const [mousePos, setMousePos] = useState<Point>({ x: 0, y: 0 });
+  const [isEditDialogOpen, setIsEditDialogOpen] = useState(false);
+  const [editRoomName, setEditRoomName] = useState('');
+  const [editRoomColor, setEditRoomColor] = useState('#2563EB');
   
   const svgRef = useRef<SVGSVGElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -106,6 +114,23 @@ function Index() {
     return { x, y };
   }, [pan, zoom]);
 
+  // Привязка к углам для стен
+  const snapToAngle = (start: Point, end: Point): Point => {
+    const dx = end.x - start.x;
+    const dy = end.y - start.y;
+    const distance = Math.sqrt(dx * dx + dy * dy);
+    
+    if (distance === 0) return end;
+    
+    const angle = Math.atan2(dy, dx);
+    const snapAngle = Math.round(angle / (Math.PI / 4)) * (Math.PI / 4); // Привязка к 45°
+    
+    return {
+      x: start.x + distance * Math.cos(snapAngle),
+      y: start.y + distance * Math.sin(snapAngle)
+    };
+  };
+
   const handleMouseDown = (event: React.MouseEvent) => {
     const pos = getMousePosition(event);
     setMousePos(pos);
@@ -150,11 +175,12 @@ function Index() {
       const pos = getMousePosition(event);
       
       if (selectedTool === 'wall') {
-        // Добавление стены
+        // Привязка к углам и добавление стены
+        const snappedEnd = snapToAngle(drawingStart, pos);
         const newWall: Wall = {
           id: Date.now().toString(),
           start: drawingStart,
-          end: pos,
+          end: snappedEnd,
           thickness: 3
         };
         setWalls(prev => [...prev, newWall]);
@@ -190,7 +216,68 @@ function Index() {
     event.stopPropagation();
     if (selectedTool === 'select') {
       setSelectedRoom(room);
+      setSelectedWall(null);
+      setSelectedDoor(null);
     }
+  };
+
+  const handleWallClick = (wall: Wall, event: React.MouseEvent) => {
+    event.stopPropagation();
+    if (selectedTool === 'select') {
+      setSelectedWall(wall);
+      setSelectedRoom(null);
+      setSelectedDoor(null);
+    }
+  };
+
+  const handleDoorClick = (door: Door, event: React.MouseEvent) => {
+    event.stopPropagation();
+    if (selectedTool === 'select') {
+      setSelectedDoor(door);
+      setSelectedRoom(null);
+      setSelectedWall(null);
+    }
+  };
+
+  const handleCanvasClick = () => {
+    if (selectedTool === 'select') {
+      setSelectedRoom(null);
+      setSelectedWall(null);
+      setSelectedDoor(null);
+    }
+  };
+
+  const deleteSelectedObject = () => {
+    if (selectedRoom) {
+      setRooms(prev => prev.filter(r => r.id !== selectedRoom.id));
+      setSelectedRoom(null);
+    } else if (selectedWall) {
+      setWalls(prev => prev.filter(w => w.id !== selectedWall.id));
+      setSelectedWall(null);
+    } else if (selectedDoor) {
+      setDoors(prev => prev.filter(d => d.id !== selectedDoor.id));
+      setSelectedDoor(null);
+    }
+  };
+
+  const openEditDialog = () => {
+    if (selectedRoom) {
+      setEditRoomName(selectedRoom.name);
+      setEditRoomColor(getRoomColor(selectedRoom.type));
+      setIsEditDialogOpen(true);
+    }
+  };
+
+  const saveRoomChanges = () => {
+    if (selectedRoom) {
+      setRooms(prev => prev.map(room => 
+        room.id === selectedRoom.id 
+          ? { ...room, name: editRoomName, type: 'custom' }
+          : room
+      ));
+      setSelectedRoom(prev => prev ? { ...prev, name: editRoomName, type: 'custom' } : null);
+    }
+    setIsEditDialogOpen(false);
   };
 
   const toggleLayer = (layerId: string) => {
@@ -206,9 +293,17 @@ function Index() {
       bedroom: '#7C3AED',
       bathroom: '#DC2626',
       corridor: '#6B7280',
-      room: '#8B5CF6'
+      room: '#8B5CF6',
+      custom: editRoomColor
     };
     return colors[type as keyof typeof colors] || '#6B7280';
+  };
+
+  const getRoomColorForEdit = (room: Room) => {
+    if (room.type === 'custom') {
+      return editRoomColor;
+    }
+    return getRoomColor(room.type);
   };
 
   const getLayerVisibility = (type: string) => {
@@ -270,6 +365,24 @@ function Index() {
                   </Button>
                 ))}
               </div>
+              
+              {(selectedRoom || selectedWall || selectedDoor) && (
+                <div className="mt-4 p-3 bg-blue-50 rounded-lg">
+                  <p className="text-xs text-blue-600 mb-2">Выбрано:</p>
+                  <p className="text-sm font-medium text-blue-900">
+{selectedRoom?.name || (selectedWall ? 'Стена' : 'Дверь')}
+                  </p>
+                  <Button 
+                    size="sm" 
+                    variant="destructive" 
+                    className="w-full mt-2"
+                    onClick={deleteSelectedObject}
+                  >
+                    <Icon name="Trash2" size={14} className="mr-1" />
+                    Удалить
+                  </Button>
+                </div>
+              )}
             </div>
 
             <Separator />
@@ -339,6 +452,7 @@ function Index() {
               onMouseUp={handleMouseUp}
               onWheel={handleWheel}
               onContextMenu={(e) => e.preventDefault()}
+              onClick={handleCanvasClick}
             >
               <defs>
                 <pattern id="grid" width={20 * zoom} height={20 * zoom} patternUnits="userSpaceOnUse">
@@ -360,9 +474,10 @@ function Index() {
                         y1={wall.start.y}
                         x2={wall.end.x}
                         y2={wall.end.y}
-                        stroke="#1f2937"
-                        strokeWidth={wall.thickness}
+                        stroke={selectedWall?.id === wall.id ? "#2563EB" : "#1f2937"}
+                        strokeWidth={selectedWall?.id === wall.id ? wall.thickness + 1 : wall.thickness}
                         className="cursor-pointer hover:stroke-blue-600"
+                        onClick={(e) => handleWallClick(wall, e)}
                       />
                     ))}
                     
@@ -371,8 +486,8 @@ function Index() {
                       <line
                         x1={drawingStart.x}
                         y1={drawingStart.y}
-                        x2={mousePos.x}
-                        y2={mousePos.y}
+                        x2={snapToAngle(drawingStart, mousePos).x}
+                        y2={snapToAngle(drawingStart, mousePos).y}
                         stroke="#2563EB"
                         strokeWidth="2"
                         strokeDasharray="5,5"
@@ -388,12 +503,21 @@ function Index() {
                       <g key={door.id} transform={`translate(${door.position.x}, ${door.position.y}) rotate(${door.angle})`}>
                         <path
                           d={`M 0 0 A ${door.width} ${door.width} 0 0 1 ${door.width} 0`}
-                          stroke="#059669"
-                          strokeWidth="2"
+                          stroke={selectedDoor?.id === door.id ? "#2563EB" : "#059669"}
+                          strokeWidth={selectedDoor?.id === door.id ? "3" : "2"}
                           fill="none"
                           className="cursor-pointer hover:stroke-green-700"
+                          onClick={(e) => handleDoorClick(door, e)}
                         />
-                        <line x1="0" y1="0" x2={door.width} y2="0" stroke="#059669" strokeWidth="2" />
+                        <line 
+                          x1="0" 
+                          y1="0" 
+                          x2={door.width} 
+                          y2="0" 
+                          stroke={selectedDoor?.id === door.id ? "#2563EB" : "#059669"} 
+                          strokeWidth={selectedDoor?.id === door.id ? "3" : "2"}
+                          onClick={(e) => handleDoorClick(door, e)}
+                        />
                       </g>
                     ))}
                   </g>
@@ -501,11 +625,11 @@ function Index() {
                 </div>
                 
                 <div className="space-y-2">
-                  <Button className="w-full" variant="outline">
+                  <Button className="w-full" variant="outline" onClick={openEditDialog}>
                     <Icon name="Settings" size={16} className="mr-2" />
                     Редактировать свойства
                   </Button>
-                  <Button className="w-full" variant="destructive" size="sm">
+                  <Button className="w-full" variant="destructive" size="sm" onClick={deleteSelectedObject}>
                     <Icon name="Trash2" size={16} className="mr-2" />
                     Удалить комнату
                   </Button>
@@ -541,6 +665,56 @@ function Index() {
           </div>
         </div>
       </div>
+
+      {/* Диалог редактирования комнаты */}
+      <Dialog open={isEditDialogOpen} onOpenChange={setIsEditDialogOpen}>
+        <DialogContent className="sm:max-w-[425px]">
+          <DialogHeader>
+            <DialogTitle>Редактирование комнаты</DialogTitle>
+          </DialogHeader>
+          <div className="grid gap-4 py-4">
+            <div className="grid grid-cols-4 items-center gap-4">
+              <Label htmlFor="name" className="text-right">
+                Название
+              </Label>
+              <Input
+                id="name"
+                value={editRoomName}
+                onChange={(e) => setEditRoomName(e.target.value)}
+                className="col-span-3"
+              />
+            </div>
+            <div className="grid grid-cols-4 items-center gap-4">
+              <Label htmlFor="color" className="text-right">
+                Цвет
+              </Label>
+              <div className="col-span-3 flex items-center space-x-2">
+                <input
+                  type="color"
+                  id="color"
+                  value={editRoomColor}
+                  onChange={(e) => setEditRoomColor(e.target.value)}
+                  className="w-12 h-8 border border-gray-300 rounded cursor-pointer"
+                />
+                <span className="text-sm text-gray-600">{editRoomColor}</span>
+              </div>
+            </div>
+            <div className="grid grid-cols-4 items-center gap-4">
+              <Label className="text-right">
+                Площадь
+              </Label>
+              <div className="col-span-3">
+                <span className="text-sm text-gray-600">{selectedRoom?.area} м²</span>
+              </div>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button type="submit" onClick={saveRoomChanges}>
+              Сохранить изменения
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
