@@ -1,9 +1,31 @@
-import { useState } from 'react';
+import { useState, useRef, useCallback } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
+import { Switch } from '@/components/ui/switch';
+import { Slider } from '@/components/ui/slider';
 import Icon from '@/components/ui/icon';
+
+interface Point {
+  x: number;
+  y: number;
+}
+
+interface Wall {
+  id: string;
+  start: Point;
+  end: Point;
+  thickness: number;
+}
+
+interface Door {
+  id: string;
+  position: Point;
+  width: number;
+  angle: number;
+  wallId?: string;
+}
 
 interface Room {
   id: string;
@@ -16,9 +38,48 @@ interface Room {
   area: number;
 }
 
+interface Layer {
+  id: string;
+  name: string;
+  visible: boolean;
+  type: 'walls' | 'doors' | 'rooms';
+}
+
 function Index() {
   const [selectedTool, setSelectedTool] = useState('select');
   const [selectedRoom, setSelectedRoom] = useState<Room | null>(null);
+  const [zoom, setZoom] = useState(1);
+  const [pan, setPan] = useState({ x: 0, y: 0 });
+  const [isPanning, setIsPanning] = useState(false);
+  const [isDrawing, setIsDrawing] = useState(false);
+  const [drawingStart, setDrawingStart] = useState<Point | null>(null);
+  const [mousePos, setMousePos] = useState<Point>({ x: 0, y: 0 });
+  
+  const svgRef = useRef<SVGSVGElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  const [layers, setLayers] = useState<Layer[]>([
+    { id: 'walls', name: 'Стены', visible: true, type: 'walls' },
+    { id: 'doors', name: 'Двери', visible: true, type: 'doors' },
+    { id: 'rooms', name: 'Комнаты', visible: true, type: 'rooms' }
+  ]);
+
+  const [walls, setWalls] = useState<Wall[]>([
+    { id: '1', start: { x: 40, y: 40 }, end: { x: 360, y: 40 }, thickness: 3 },
+    { id: '2', start: { x: 360, y: 40 }, end: { x: 360, y: 260 }, thickness: 3 },
+    { id: '3', start: { x: 360, y: 260 }, end: { x: 40, y: 260 }, thickness: 3 },
+    { id: '4', start: { x: 40, y: 260 }, end: { x: 40, y: 40 }, thickness: 3 },
+    { id: '5', start: { x: 170, y: 40 }, end: { x: 170, y: 130 }, thickness: 3 },
+    { id: '6', start: { x: 170, y: 150 }, end: { x: 170, y: 260 }, thickness: 3 },
+    { id: '7', start: { x: 40, y: 130 }, end: { x: 130, y: 130 }, thickness: 3 },
+    { id: '8', start: { x: 150, y: 130 }, end: { x: 360, y: 130 }, thickness: 3 }
+  ]);
+
+  const [doors, setDoors] = useState<Door[]>([
+    { id: '1', position: { x: 140, y: 130 }, width: 20, angle: 0 },
+    { id: '2', position: { x: 170, y: 140 }, width: 20, angle: 90 }
+  ]);
+
   const [rooms, setRooms] = useState<Room[]>([
     { id: '1', x: 50, y: 50, width: 120, height: 80, type: 'living', name: 'Гостиная', area: 25.6 },
     { id: '2', x: 200, y: 50, width: 100, height: 80, type: 'kitchen', name: 'Кухня', area: 12.5 },
@@ -34,8 +95,108 @@ function Index() {
     { id: 'corridor', name: 'Коридор', icon: 'ArrowRight' }
   ];
 
-  const handleRoomClick = (room: Room) => {
-    setSelectedRoom(room);
+  // Обработка мыши для canvas
+  const getMousePosition = useCallback((event: React.MouseEvent) => {
+    if (!svgRef.current) return { x: 0, y: 0 };
+    
+    const rect = svgRef.current.getBoundingClientRect();
+    const x = (event.clientX - rect.left - pan.x) / zoom;
+    const y = (event.clientY - rect.top - pan.y) / zoom;
+    
+    return { x, y };
+  }, [pan, zoom]);
+
+  const handleMouseDown = (event: React.MouseEvent) => {
+    const pos = getMousePosition(event);
+    setMousePos(pos);
+
+    if (selectedTool === 'select' && event.button === 1) {
+      // Средняя кнопка мыши для панорамирования
+      setIsPanning(true);
+      event.preventDefault();
+    } else if (selectedTool === 'wall' || selectedTool === 'room') {
+      setIsDrawing(true);
+      setDrawingStart(pos);
+    } else if (selectedTool === 'door') {
+      // Добавление двери
+      const newDoor: Door = {
+        id: Date.now().toString(),
+        position: pos,
+        width: 20,
+        angle: 0
+      };
+      setDoors(prev => [...prev, newDoor]);
+    }
+  };
+
+  const handleMouseMove = (event: React.MouseEvent) => {
+    const pos = getMousePosition(event);
+    setMousePos(pos);
+
+    if (isPanning) {
+      setPan(prev => ({
+        x: prev.x + event.movementX,
+        y: prev.y + event.movementY
+      }));
+    }
+  };
+
+  const handleMouseUp = (event: React.MouseEvent) => {
+    if (isPanning) {
+      setIsPanning(false);
+    }
+    
+    if (isDrawing && drawingStart) {
+      const pos = getMousePosition(event);
+      
+      if (selectedTool === 'wall') {
+        // Добавление стены
+        const newWall: Wall = {
+          id: Date.now().toString(),
+          start: drawingStart,
+          end: pos,
+          thickness: 3
+        };
+        setWalls(prev => [...prev, newWall]);
+      } else if (selectedTool === 'room') {
+        // Добавление комнаты
+        const newRoom: Room = {
+          id: Date.now().toString(),
+          x: Math.min(drawingStart.x, pos.x),
+          y: Math.min(drawingStart.y, pos.y),
+          width: Math.abs(pos.x - drawingStart.x),
+          height: Math.abs(pos.y - drawingStart.y),
+          type: 'room',
+          name: `Комната ${rooms.length + 1}`,
+          area: Math.round(Math.abs(pos.x - drawingStart.x) * Math.abs(pos.y - drawingStart.y) / 100 * 10) / 10
+        };
+        setRooms(prev => [...prev, newRoom]);
+      }
+      
+      setIsDrawing(false);
+      setDrawingStart(null);
+    }
+  };
+
+  // Масштабирование колесом мыши
+  const handleWheel = (event: React.WheelEvent) => {
+    event.preventDefault();
+    const delta = event.deltaY > 0 ? 0.9 : 1.1;
+    const newZoom = Math.max(0.1, Math.min(5, zoom * delta));
+    setZoom(newZoom);
+  };
+
+  const handleRoomClick = (room: Room, event: React.MouseEvent) => {
+    event.stopPropagation();
+    if (selectedTool === 'select') {
+      setSelectedRoom(room);
+    }
+  };
+
+  const toggleLayer = (layerId: string) => {
+    setLayers(prev => prev.map(layer => 
+      layer.id === layerId ? { ...layer, visible: !layer.visible } : layer
+    ));
   };
 
   const getRoomColor = (type: string) => {
@@ -44,9 +205,20 @@ function Index() {
       kitchen: '#059669',
       bedroom: '#7C3AED',
       bathroom: '#DC2626',
-      corridor: '#6B7280'
+      corridor: '#6B7280',
+      room: '#8B5CF6'
     };
     return colors[type as keyof typeof colors] || '#6B7280';
+  };
+
+  const getLayerVisibility = (type: string) => {
+    const layer = layers.find(l => l.type === type);
+    return layer ? layer.visible : true;
+  };
+
+  const resetView = () => {
+    setZoom(1);
+    setPan({ x: 0, y: 0 });
   };
 
   return (
@@ -104,29 +276,49 @@ function Index() {
 
             <div>
               <h3 className="text-sm font-medium text-gray-900 mb-3">Слои</h3>
-              <div className="space-y-2">
-                <div className="flex items-center justify-between text-sm">
-                  <span>Стены</span>
-                  <Icon name="Eye" size={14} className="text-gray-400" />
-                </div>
-                <div className="flex items-center justify-between text-sm">
-                  <span>Двери</span>
-                  <Icon name="Eye" size={14} className="text-gray-400" />
-                </div>
-                <div className="flex items-center justify-between text-sm">
-                  <span>Комнаты</span>
-                  <Icon name="Eye" size={14} className="text-gray-400" />
-                </div>
+              <div className="space-y-3">
+                {layers.map((layer) => (
+                  <div key={layer.id} className="flex items-center justify-between">
+                    <span className="text-sm">{layer.name}</span>
+                    <Switch
+                      checked={layer.visible}
+                      onCheckedChange={() => toggleLayer(layer.id)}
+                    />
+                  </div>
+                ))}
               </div>
             </div>
 
             <Separator />
 
             <div>
-              <h3 className="text-sm font-medium text-gray-900 mb-3">Размеры</h3>
+              <h3 className="text-sm font-medium text-gray-900 mb-3">Вид</h3>
+              <div className="space-y-3">
+                <div>
+                  <label className="text-xs text-gray-600 mb-2 block">Масштаб: {Math.round(zoom * 100)}%</label>
+                  <Slider
+                    value={[zoom]}
+                    onValueChange={(value) => setZoom(value[0])}
+                    min={0.1}
+                    max={5}
+                    step={0.1}
+                    className="w-full"
+                  />
+                </div>
+                <Button variant="outline" size="sm" onClick={resetView} className="w-full">
+                  <Icon name="RotateCcw" size={14} className="mr-2" />
+                  Сбросить вид
+                </Button>
+              </div>
+            </div>
+
+            <Separator />
+
+            <div>
+              <h3 className="text-sm font-medium text-gray-900 mb-3">Сетка</h3>
               <div className="text-xs text-gray-600">
-                <div>Масштаб: 1:100</div>
-                <div>Сетка: 1м</div>
+                <div>Размер: 1м</div>
+                <div>Координаты: {Math.round(mousePos.x)}, {Math.round(mousePos.y)}</div>
               </div>
             </div>
           </div>
@@ -134,64 +326,127 @@ function Index() {
 
         {/* Main Canvas Area */}
         <div className="flex-1 flex">
-          <div className="flex-1 bg-white relative overflow-hidden">
-            <div className="absolute inset-0 bg-gray-50">
-              {/* Grid Pattern */}
-              <svg className="absolute inset-0 w-full h-full" style={{ backgroundImage: 'radial-gradient(circle, #e5e7eb 1px, transparent 1px)', backgroundSize: '20px 20px' }}>
-                <defs>
-                  <pattern id="grid" width="20" height="20" patternUnits="userSpaceOnUse">
-                    <path d="M 20 0 L 0 0 0 20" fill="none" stroke="#f3f4f6" strokeWidth="1"/>
-                  </pattern>
-                </defs>
-                <rect width="100%" height="100%" fill="url(#grid)" />
-              </svg>
+          <div 
+            ref={containerRef}
+            className="flex-1 bg-white relative overflow-hidden cursor-crosshair"
+            style={{ cursor: selectedTool === 'select' ? 'default' : 'crosshair' }}
+          >
+            <svg
+              ref={svgRef}
+              className="absolute inset-0 w-full h-full"
+              onMouseDown={handleMouseDown}
+              onMouseMove={handleMouseMove}
+              onMouseUp={handleMouseUp}
+              onWheel={handleWheel}
+              onContextMenu={(e) => e.preventDefault()}
+            >
+              <defs>
+                <pattern id="grid" width={20 * zoom} height={20 * zoom} patternUnits="userSpaceOnUse">
+                  <path d={`M ${20 * zoom} 0 L 0 0 0 ${20 * zoom}`} fill="none" stroke="#f3f4f6" strokeWidth="1"/>
+                </pattern>
+              </defs>
               
-              {/* Room Plan SVG */}
-              <svg className="absolute inset-0 w-full h-full" viewBox="0 0 400 300">
-                {/* Walls */}
-                <g stroke="#1f2937" strokeWidth="3" fill="none">
-                  <rect x="40" y="40" width="320" height="220" />
-                  <line x1="170" y1="40" x2="170" y2="130" />
-                  <line x1="170" y1="150" x2="170" y2="260" />
-                  <line x1="40" y1="130" x2="130" y2="130" />
-                  <line x1="150" y1="130" x2="360" y2="130" />
-                </g>
-
-                {/* Doors */}
-                <g stroke="#059669" strokeWidth="2" fill="none">
-                  <path d="M 130 130 A 20 20 0 0 1 150 130" />
-                  <path d="M 170 130 A 20 20 0 0 1 170 150" />
-                </g>
-
-                {/* Room Rectangles */}
-                {rooms.map((room) => (
-                  <g key={room.id}>
-                    <rect
-                      x={room.x}
-                      y={room.y}
-                      width={room.width}
-                      height={room.height}
-                      fill={getRoomColor(room.type)}
-                      fillOpacity="0.1"
-                      stroke={getRoomColor(room.type)}
-                      strokeWidth="2"
-                      className="cursor-pointer hover:fill-opacity-20 transition-all"
-                      onClick={() => handleRoomClick(room)}
-                    />
-                    <text
-                      x={room.x + room.width / 2}
-                      y={room.y + room.height / 2}
-                      textAnchor="middle"
-                      dominantBaseline="middle"
-                      className="text-xs font-medium pointer-events-none"
-                      fill={getRoomColor(room.type)}
-                    >
-                      {room.name}
-                    </text>
+              {/* Grid */}
+              <rect width="100%" height="100%" fill="url(#grid)" />
+              
+              <g transform={`translate(${pan.x}, ${pan.y}) scale(${zoom})`}>
+                {/* Walls Layer */}
+                {getLayerVisibility('walls') && (
+                  <g>
+                    {walls.map((wall) => (
+                      <line
+                        key={wall.id}
+                        x1={wall.start.x}
+                        y1={wall.start.y}
+                        x2={wall.end.x}
+                        y2={wall.end.y}
+                        stroke="#1f2937"
+                        strokeWidth={wall.thickness}
+                        className="cursor-pointer hover:stroke-blue-600"
+                      />
+                    ))}
+                    
+                    {/* Preview line while drawing */}
+                    {isDrawing && selectedTool === 'wall' && drawingStart && (
+                      <line
+                        x1={drawingStart.x}
+                        y1={drawingStart.y}
+                        x2={mousePos.x}
+                        y2={mousePos.y}
+                        stroke="#2563EB"
+                        strokeWidth="2"
+                        strokeDasharray="5,5"
+                      />
+                    )}
                   </g>
-                ))}
-              </svg>
-            </div>
+                )}
+
+                {/* Doors Layer */}
+                {getLayerVisibility('doors') && (
+                  <g>
+                    {doors.map((door) => (
+                      <g key={door.id} transform={`translate(${door.position.x}, ${door.position.y}) rotate(${door.angle})`}>
+                        <path
+                          d={`M 0 0 A ${door.width} ${door.width} 0 0 1 ${door.width} 0`}
+                          stroke="#059669"
+                          strokeWidth="2"
+                          fill="none"
+                          className="cursor-pointer hover:stroke-green-700"
+                        />
+                        <line x1="0" y1="0" x2={door.width} y2="0" stroke="#059669" strokeWidth="2" />
+                      </g>
+                    ))}
+                  </g>
+                )}
+
+                {/* Rooms Layer */}
+                {getLayerVisibility('rooms') && (
+                  <g>
+                    {rooms.map((room) => (
+                      <g key={room.id}>
+                        <rect
+                          x={room.x}
+                          y={room.y}
+                          width={room.width}
+                          height={room.height}
+                          fill={getRoomColor(room.type)}
+                          fillOpacity="0.1"
+                          stroke={getRoomColor(room.type)}
+                          strokeWidth={selectedRoom?.id === room.id ? "3" : "2"}
+                          className="cursor-pointer hover:fill-opacity-20 transition-all"
+                          onClick={(e) => handleRoomClick(room, e)}
+                        />
+                        <text
+                          x={room.x + room.width / 2}
+                          y={room.y + room.height / 2}
+                          textAnchor="middle"
+                          dominantBaseline="middle"
+                          className="text-xs font-medium pointer-events-none select-none"
+                          fill={getRoomColor(room.type)}
+                        >
+                          {room.name}
+                        </text>
+                      </g>
+                    ))}
+                    
+                    {/* Preview rectangle while drawing */}
+                    {isDrawing && selectedTool === 'room' && drawingStart && (
+                      <rect
+                        x={Math.min(drawingStart.x, mousePos.x)}
+                        y={Math.min(drawingStart.y, mousePos.y)}
+                        width={Math.abs(mousePos.x - drawingStart.x)}
+                        height={Math.abs(mousePos.y - drawingStart.y)}
+                        fill="#8B5CF6"
+                        fillOpacity="0.1"
+                        stroke="#8B5CF6"
+                        strokeWidth="2"
+                        strokeDasharray="5,5"
+                      />
+                    )}
+                  </g>
+                )}
+              </g>
+            </svg>
           </div>
 
           {/* Properties Panel */}
@@ -245,17 +500,26 @@ function Index() {
                   </div>
                 </div>
                 
-                <div className="pt-4">
+                <div className="space-y-2">
                   <Button className="w-full" variant="outline">
                     <Icon name="Settings" size={16} className="mr-2" />
                     Редактировать свойства
+                  </Button>
+                  <Button className="w-full" variant="destructive" size="sm">
+                    <Icon name="Trash2" size={16} className="mr-2" />
+                    Удалить комнату
                   </Button>
                 </div>
               </div>
             ) : (
               <div className="text-center text-gray-500 mt-8">
                 <Icon name="MousePointer" size={48} className="mx-auto mb-4 text-gray-300" />
-                <p className="text-sm">Выберите комнату на плане для просмотра информации</p>
+                <p className="text-sm mb-4">Выберите комнату на плане для просмотра информации</p>
+                <div className="text-xs text-gray-400 space-y-1">
+                  <p>• Используйте колесо мыши для масштабирования</p>
+                  <p>• Средняя кнопка мыши для перетаскивания</p>
+                  <p>• Выберите инструмент и рисуйте на холсте</p>
+                </div>
               </div>
             )}
           </div>
@@ -266,8 +530,9 @@ function Index() {
       <div className="bg-gray-50 border-t border-gray-200 px-4 py-2">
         <div className="flex justify-between items-center text-xs text-gray-600">
           <div className="flex items-center space-x-4">
-            <span>Координаты: 0, 0</span>
-            <span>Масштаб: 100%</span>
+            <span>Координаты: {Math.round(mousePos.x)}, {Math.round(mousePos.y)}</span>
+            <span>Масштаб: {Math.round(zoom * 100)}%</span>
+            <span>Инструмент: {tools.find(t => t.id === selectedTool)?.name}</span>
             <span>Выбрано: {selectedRoom ? selectedRoom.name : 'Нет'}</span>
           </div>
           <div className="flex items-center space-x-2">
